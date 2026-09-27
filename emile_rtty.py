@@ -1923,7 +1923,11 @@ def main():
     p.add_argument("--indicatif", help="mon indicatif (sinon celui de la configuration)")
     p.add_argument("--echange", help="échange de contest (sinon celui de la configuration)")
     args = p.parse_args()
-    racine = tk.Tk()
+    # Nom de classe fixe : permet au dock (GNOME, KDE) de ranger la fenêtre sous son lanceur
+    racine = tk.Tk(className="Emile-RTTY")
+    icone = Path(__file__).resolve().parent / "docs" / "emile-rtty-icone.png"
+    if icone.is_file():
+        racine.iconphoto(True, tk.PhotoImage(file=str(icone)))
     racine.geometry("960x820")
     racine.minsize(820, 700)
     Application(racine, args)
