@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+# Enregistrements audio, journaux et logs de concours : propres à chaque station
+*.wav
+*.adi
+*.adif
+*.cbr
+cty.dat
