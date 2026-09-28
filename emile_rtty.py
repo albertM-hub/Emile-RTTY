@@ -208,9 +208,9 @@ class ATC:
             self.bruit = float(np.minimum(a[:50], b[:50]).min())
         ca, cb, nf = self.ca, self.cb, self.bruit
         wa, wc, wn = self.w_att, self.w_crete, self.w_bruit
-        d = np.empty(len(a), np.float32)
-        for i in range(len(a)):          # boucle simple : ~3000 échantillons/s seulement
-            va, vb = a[i], b[i]
+        d = [0.0] * len(a)
+        # Boucle sur des listes Python : ~4 fois plus rapide que sur des scalaires numpy
+        for i, (va, vb) in enumerate(zip(a.tolist(), b.tolist())):
             ca += (va - ca) / (wa if va > ca else wc)
             cb += (vb - cb) / (wa if vb > cb else wc)
             m = va if va < vb else vb
@@ -223,7 +223,7 @@ class ATC:
             # Normalisation pour retrouver une échelle [-1, 1] (utile au squelch)
             d[i] = v / (0.5 * (pa * pa + pb * pb) + 1e-12)
         self.ca, self.cb, self.bruit = ca, cb, nf
-        return np.clip(d, -1, 1)
+        return np.clip(np.array(d, np.float32), -1, 1)
 
 
 class Demodulateur:
@@ -674,6 +674,9 @@ class Journal:
         try:
             texte = self.chemin.read_text(encoding="utf-8", errors="replace")
         except FileNotFoundError:
+            return []
+        except OSError as e:
+            print(f"Journal illisible ({self.chemin}) : {e}")
             return []
         texte = re.split(r"<eoh>", texte, flags=re.I)[-1]    # on saute l'en-tête
         qsos = []
@@ -1415,7 +1418,11 @@ class Application:
     def _quitter(self):
         sauver_config(self._cfg_a_jour())
         if self.client:
+            # Le thread réseau (daemon) doit avoir le temps d'envoyer « trx:0,false; »,
+            # sinon une fermeture pendant l'émission pourrait laisser l'émetteur en TX
+            self.client.arreter_tx()
             self.client.stop_evt.set()
+            self.client.join(1.0)
         self.r.destroy()
 
     # --- journal ---------------------------------------------------------------------
@@ -1687,6 +1694,9 @@ class Application:
             return False
         self.tx_limite = time.monotonic() + len(audio) / SR + 5
         self.client.emettre(audio)
+        # En TX dès la demande (sans attendre la confirmation du thread réseau) :
+        # un second appui rapide sur une macro ne doit pas l'afficher deux fois
+        self._etat_tx(True)
         # Écho du texte émis dans la fenêtre, en rouge
         if self.texte.get("end-2c") not in ("\n", ""):
             self.texte.insert("end", "\n")
@@ -1726,7 +1736,14 @@ class Application:
             self.client.stop_evt.set()
             self.b_connexion.config(state="disabled")
             return
-        self.client = ClientTCI(self.v_host.get(), int(self.v_port.get()), 0, self.q)
+        try:
+            port = int(self.v_port.get())
+            if not 0 < port < 65536:
+                raise ValueError
+        except ValueError:
+            self.etat = "Port TCI invalide"
+            return
+        self.client = ClientTCI(self.v_host.get().strip(), port, 0, self.q)
         self.client.start()
         self.b_connexion.config(text="Déconnecter")
 
@@ -1804,6 +1821,14 @@ class Application:
 
     # --- boucle de traitement ----------------------------------------------------------
     def _scruter(self):
+        # Relance garantie : une exception ne doit pas arrêter la réception
+        # ni la coupure de sécurité de l'émission
+        try:
+            self._scruter_etape()
+        finally:
+            self.r.after(50, self._scruter)
+
+    def _scruter_etape(self):
         # Sécurité : coupure si l'émission dure anormalement longtemps
         if self.en_tx and time.monotonic() > self.tx_limite:
             self._stop_tx()
@@ -1856,7 +1881,6 @@ class Application:
             chars = self.rafale.filtrer(self.uart.alimenter(s * d, s * d_simple))
             self.n_recu += len(x)
             self._afficher(chars)
-        self.r.after(50, self._scruter)
 
     def _afficher(self, chars):
         if not chars:
@@ -1878,6 +1902,12 @@ class Application:
 
     def _rafraichir(self):
         """Toutes les 150 ms : nouvelle ligne de cascade, barre d'état, netteté, marqueurs."""
+        try:
+            self._rafraichir_etape()
+        finally:
+            self.r.after(150, self._rafraichir)
+
+    def _rafraichir_etape(self):
         n = 8192                                        # ~0,17 s, résolution ~6 Hz
         if self.n_recu != self.n_vu and not self.en_tx and np.any(self.historique[-n:]):
             self.n_vu = self.n_recu
@@ -1906,7 +1936,6 @@ class Application:
         q = self.uart.qualite if self.client else 0
         self.barre.coords(self.barre_val, 0, 0, 60 * min(1.0, q), 8)
         self._maj_tons()
-        self.r.after(150, self._rafraichir)
 
     def _afficher_cascade(self):
         """Image PPM construite en mémoire à partir du tableau numpy (rapide, sans PIL)."""

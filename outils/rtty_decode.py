@@ -131,9 +131,9 @@ class ATC:
             self.bruit = float(np.minimum(a[:50], b[:50]).min())
         ca, cb, nf = self.ca, self.cb, self.bruit
         wa, wc, wn = self.w_att, self.w_crete, self.w_bruit
-        d = np.empty(len(a), np.float32)
-        for i in range(len(a)):          # boucle simple : ~3000 échantillons/s seulement
-            va, vb = a[i], b[i]
+        d = [0.0] * len(a)
+        # Boucle sur des listes Python : ~4 fois plus rapide que sur des scalaires numpy
+        for i, (va, vb) in enumerate(zip(a.tolist(), b.tolist())):
             ca += (va - ca) / (wa if va > ca else wc)
             cb += (vb - cb) / (wa if vb > cb else wc)
             m = va if va < vb else vb
@@ -146,7 +146,7 @@ class ATC:
             # Normalisation pour retrouver une échelle [-1, 1] (utile au squelch)
             d[i] = v / (0.5 * (pa * pa + pb * pb) + 1e-12)
         self.ca, self.cb, self.bruit = ca, cb, nf
-        return np.clip(d, -1, 1)
+        return np.clip(np.array(d, np.float32), -1, 1)
 
 
 def decoder_bits(d, sr_d, uos=True, sql=0.45, d_sql=None):
